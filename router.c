@@ -103,7 +103,9 @@ int main(int argc, char *argv[])
 					
 					struct iphdr *ip_hdr_packet = (struct iphdr*) (packet + sizeof(struct ether_header));
 
-					struct arp_table_entry *table_entry_packet = get_mac_entry(ip_hdr_packet->daddr);
+					struct route_table_entry *next = get_best_route(ip_hdr_packet->daddr);
+
+					struct arp_table_entry *table_entry_packet = get_mac_entry(next->next_hop);
 					if (!table_entry_packet) {
 						queue_enq(q, packet);
 						queue_enq(q, packet_len);
@@ -113,8 +115,6 @@ int main(int argc, char *argv[])
 					struct ether_header *eth_hdr_packet = (struct ether_header *)packet;
 
 					memcpy(eth_hdr_packet->ether_dhost, table_entry_packet->mac, 6);
-
-					struct route_table_entry *next = get_best_route(ip_hdr_packet->daddr);
 					
 					printf("packet_len: %d\n", *packet_len);
 					send_to_link(next->interface, packet, *packet_len);
