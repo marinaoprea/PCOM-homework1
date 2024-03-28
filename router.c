@@ -170,15 +170,72 @@ int main(int argc, char *argv[])
 		struct route_table_entry *next = get_best_route(ip_hdr->daddr);
 		if (!next) {
 			printf("Ignored packet; route not found\n");
+			char *icmp_packet = malloc(MAX_PACKET_LEN);
+			memset(icmp_packet, 0, MAX_PACKET_LEN);
+
+			struct ether_header *eth_icmp = (struct ether_header*)icmp_packet;
+			struct iphdr *ip_hdr_icmp = (struct iphdr *)(icmp_packet + sizeof(struct ether_header));
+
+			memcpy(eth_icmp->ether_dhost, eth_hdr->ether_shost, 6);
+			get_interface_mac(interface, eth_icmp->ether_shost);
+			eth_icmp->ether_type = htons(0x0800);
+
+			memcpy(ip_hdr_icmp, ip_hdr, sizeof(struct iphdr));
+			ip_hdr_icmp->protocol = 1; // for icmp
+			ip_hdr_icmp->ttl = 64;
+			ip_hdr_icmp->tot_len = 16 + 2 * sizeof(struct iphdr);
+			ip_hdr_icmp->daddr = ip_hdr->saddr;
+
+
+			char *first_64 = malloc(8); // 8 bytes is 64 bits
+			memcpy(first_64, buf + sizeof(struct ether_header) + sizeof(struct iphdr), 8);
+
+			struct icmphdr *icmp_hdr = (struct icmphdr *)(icmp_packet + sizeof(struct ether_header) + sizeof(struct iphdr));
+			icmp_hdr->type = 3;
+			icmp_hdr->code = 0;
+			memcpy(icmp_hdr + 8, ip_hdr, sizeof(struct iphdr));
+			memcpy(icmp_hdr + 8 + sizeof(struct iphdr), first_64, 8);
+			icmp_hdr->checksum = htons(checksum((uint16_t *)icmp_hdr, 16 + sizeof(struct iphdr)));
+			send_to_link(interface, icmp_packet, sizeof(struct ether_header) + sizeof(struct iphdr) + 16 + sizeof(struct iphdr));
+			printf("sent icmp\n");
+			continue;
 			continue;
 		}
 
 		/* TODO 2.3: Check TTL >= 1. Update TLL. Update checksum  */
-		if (ip_hdr->ttl >= 1) {
+		if (ip_hdr->ttl > 1) {
 			ip_hdr->ttl--;
 			ip_hdr->check = htons(checksum((uint16_t *)ip_hdr, sizeof(struct iphdr)));
 		} else {
 			printf("Ignored packet; no more ttl\n");
+			char *icmp_packet = malloc(MAX_PACKET_LEN);
+			memset(icmp_packet, 0, MAX_PACKET_LEN);
+
+			struct ether_header *eth_icmp = (struct ether_header*)icmp_packet;
+			struct iphdr *ip_hdr_icmp = (struct iphdr *)(icmp_packet + sizeof(struct ether_header));
+
+			memcpy(eth_icmp->ether_dhost, eth_hdr->ether_shost, 6);
+			get_interface_mac(interface, eth_icmp->ether_shost);
+			eth_icmp->ether_type = htons(0x0800);
+
+			memcpy(ip_hdr_icmp, ip_hdr, sizeof(struct iphdr));
+			ip_hdr_icmp->protocol = 1; // for icmp
+			ip_hdr_icmp->ttl = 64;
+			ip_hdr_icmp->tot_len = 16 + 2 * sizeof(struct iphdr);
+			ip_hdr_icmp->daddr = ip_hdr->saddr;
+
+
+			char *first_64 = malloc(8); // 8 bytes is 64 bits
+			memcpy(first_64, buf + sizeof(struct ether_header) + sizeof(struct iphdr), 8);
+
+			struct icmphdr *icmp_hdr = (struct icmphdr *)(icmp_packet + sizeof(struct ether_header) + sizeof(struct iphdr));
+			icmp_hdr->type = 11;
+			icmp_hdr->code = 0;
+			memcpy(icmp_hdr + 8, ip_hdr, sizeof(struct iphdr));
+			memcpy(icmp_hdr + 8 + sizeof(struct iphdr), first_64, 8);
+			icmp_hdr->checksum = htons(checksum((uint16_t *)icmp_hdr, 16 + sizeof(struct iphdr)));
+			send_to_link(interface, icmp_packet, sizeof(struct ether_header) + sizeof(struct iphdr) + 16 + sizeof(struct iphdr));
+			printf("sent icmp\n");
 			continue;
 		}
 
@@ -245,4 +302,3 @@ int main(int argc, char *argv[])
 		send_to_link(next->interface, buf, len);
 	}
 }
-
