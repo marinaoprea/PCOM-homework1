@@ -38,7 +38,8 @@ void get_parsed_ip_interface(int interface, uint32_t *ip)
  Returns a pointer (eg. &rtable[i]) to the best matching route, or NULL if there
  is no matching route.
 */
-struct route_table_entry *get_best_route(uint32_t ip_dest) {
+struct route_table_entry *get_best_route(uint32_t ip_dest)
+{
 	int index = search(root, ip_dest);
 	printf("index found: %d\n", index);
 	if (index == -1)
@@ -46,7 +47,8 @@ struct route_table_entry *get_best_route(uint32_t ip_dest) {
 	return &rtable[index];
 }
 
-struct arp_table_entry *get_mac_entry(uint32_t given_ip) {
+struct arp_table_entry *get_mac_entry(uint32_t given_ip)
+{
 	/* Iterates through the MAC table and search for an entry
 	 * that matches given_ip. */
 
@@ -57,11 +59,30 @@ struct arp_table_entry *get_mac_entry(uint32_t given_ip) {
 	return NULL;
 }
 
-void insert_addresses(void) {
+void insert_addresses(void)
+{
 	for (int i = 0; i < rtable_len; i++)
 		insert_address(root, rtable[i], i);
 }
 
+void update_arp_table(struct arp_header* arp_hdr)
+{
+	mac_table_len++;
+	mac_table = realloc(mac_table, mac_table_len * sizeof (struct arp_table_entry));
+	DIE(!mac_table, "realloc");
+
+	memcpy(mac_table[mac_table_len - 1].mac, arp_hdr->sha, 6);
+	mac_table[mac_table_len - 1].ip = arp_hdr->spa;
+}
+
+int check_broadcast(uint8_t mac[6])
+{
+	int i;
+	for (i = 0; i < 6; i++)
+		if (mac[i] != 0xff)
+			break;
+	return (i == 6);
+}
 
 int main(int argc, char *argv[])
 {
@@ -101,11 +122,7 @@ int main(int argc, char *argv[])
 			if (arp_hdr->op == ntohs(2)) { // we got arp reply
 				printf("got arp reply\n");
 
-				mac_table_len++;
-				mac_table = realloc(mac_table, mac_table_len * sizeof (struct arp_table_entry));
-
-				memcpy(mac_table[mac_table_len - 1].mac, arp_hdr->sha, 6);
-				mac_table[mac_table_len - 1].ip = arp_hdr->spa;
+				update_arp_table(arp_hdr);
 
 				while (!queue_empty(q)) {
 					void *packet = queue_deq(q);
@@ -116,30 +133,30 @@ int main(int argc, char *argv[])
 					struct route_table_entry *next = get_best_route(ip_hdr_packet->daddr);
 
 					struct arp_table_entry *table_entry_packet = get_mac_entry(next->next_hop);
+
+					// still didn't receive mac address, we enque packet again
 					if (!table_entry_packet) {
 						queue_enq(q, packet);
 						queue_enq(q, packet_len);
 						break;
 					}
 
+					// got mac address so we can send the packet
 					struct ether_header *eth_hdr_packet = (struct ether_header *)packet;
 
 					memcpy(eth_hdr_packet->ether_dhost, table_entry_packet->mac, 6);
-					
-					printf("packet_len: %d\n", *packet_len);
+
 					send_to_link(next->interface, packet, *packet_len);
+
+					free(packet); // data was written to interface file descriptor
+					free(packet_len);
 				}
 				continue;
 			}
 			if (arp_hdr->op == ntohs(1)) { // we received an arp request
 				printf("got arp request\n");
-				printf("%u\n", arp_hdr->tpa);
 
-				int i, broadcast = 0;
-				for (i = 0; i < 6; i++)
-					if (eth_hdr->ether_dhost[i] != 0xff)
-						break;
-				broadcast = (i == 6);
+				int broadcast = check_broadcast(eth_hdr->ether_dhost);
 
 				uint32_t *ip = malloc(sizeof(u_int32_t));
 				get_parsed_ip_interface(interface, ip);
@@ -197,6 +214,7 @@ int main(int argc, char *argv[])
 
 				if (ip_hdr->daddr == *((uint32_t *)ip)) {
 					printf("got icmp echo for us\n");
+
 					char *icmp_packet = malloc(MAX_PACKET_LEN);
 					memset(icmp_packet, 0, MAX_PACKET_LEN);
 
@@ -210,25 +228,23 @@ int main(int argc, char *argv[])
 					memcpy(ip_hdr_icmp, ip_hdr, sizeof(struct iphdr));
 					ip_hdr_icmp->protocol = 1; // for icmp
 					ip_hdr_icmp->ttl = 64;
-					ip_hdr_icmp->tot_len = 16 + 2 * sizeof(struct iphdr);
+					ip_hdr_icmp->tot_len = len;
 					ip_hdr_icmp->daddr = ip_hdr->saddr;
-
-
-					/*char *first_64 = malloc(8); // 8 bytes is 64 bits
-					memcpy(first_64, buf + sizeof(struct ether_header) + sizeof(struct iphdr), 8);*/
+					ip_hdr_icmp->saddr = *(uint32_t *)ip;
+					ip_hdr_icmp->check = 0;
+					ip_hdr_icmp->check = htons(checksum((uint16_t *) ip_hdr_icmp, sizeof(struct iphdr)));
 
 					struct icmphdr *icmp_hdr_new = (struct icmphdr *)(icmp_packet + sizeof(struct ether_header) + sizeof(struct iphdr));
 					memcpy(icmp_hdr_new, icmp_hdr, sizeof(struct icmphdr));
 					icmp_hdr_new->type = 0; // for reply
 					icmp_hdr_new->checksum = 0;
-					// memcpy(icmp_hdr_new + 8, ip_hdr, sizeof(struct iphdr));
-					// memcpy(icmp_hdr_new + 8 + sizeof(struct iphdr), first_64, 8);
 					icmp_hdr_new->checksum = htons(checksum((uint16_t *)icmp_hdr, sizeof(struct icmphdr)));
 					memcpy(((char *)icmp_hdr_new) + sizeof(struct icmphdr), (char *)ip_hdr + sizeof(struct iphdr) + sizeof(struct icmphdr), len - sizeof(struct ether_header) - sizeof(struct iphdr) - sizeof(struct icmphdr));
 
 					send_to_link(interface, icmp_packet, len);
 					printf("sent icmp reply\n");
 
+					free(icmp_packet);
 					free(ip);
 					continue;
 				}
