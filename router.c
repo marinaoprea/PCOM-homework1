@@ -19,13 +19,26 @@ queue q;
 
 node_t *root;
 
+void get_parsed_ip_interface(int interface, uint32_t *ip)
+{
+	char *my_ip = get_interface_ip(interface);
+	printf("my_ip: %s\n", my_ip);
+	uint8_t* curr = (uint8_t *)ip;
+	char *p = strtok(my_ip, ".");
+	int i = 0;
+	while (p) {
+		curr[i] = atoi(p);
+		i++;
+		p = strtok(NULL, ".");
+	}
+	printf("%u\n", *ip);
+}
+
 /*
  Returns a pointer (eg. &rtable[i]) to the best matching route, or NULL if there
  is no matching route.
 */
 struct route_table_entry *get_best_route(uint32_t ip_dest) {
-	/* TODO 2.2: Implement the LPM algorithm */
-	/* the rtable are in network order already */
 	int index = search(root, ip_dest);
 	printf("index found: %d\n", index);
 	if (index == -1)
@@ -34,11 +47,8 @@ struct route_table_entry *get_best_route(uint32_t ip_dest) {
 }
 
 struct arp_table_entry *get_mac_entry(uint32_t given_ip) {
-	/* TODO 2.4: Iterate through the MAC table and search for an entry
+	/* Iterates through the MAC table and search for an entry
 	 * that matches given_ip. */
-
-	/* We can iterate thrpigh the mac_table for (int i = 0; i <
-	 * mac_table_len; i++) */
 
 	for (int i = 0; i < mac_table_len; i++)
 		if (mac_table[i].ip == given_ip)
@@ -131,18 +141,8 @@ int main(int argc, char *argv[])
 						break;
 				broadcast = (i == 6);
 
-				char *my_ip = get_interface_ip(interface);
-				printf("my_ip: %s\n", my_ip);
-				uint8_t *ip = malloc(4);
-				char *p = strtok(my_ip, ".");
-				i = 0;
-				while (p) {
-					ip[i] = atoi(p);
-					i++;
-					p = strtok(NULL, ".");
-				}
-				printf("%u\n", *((uint32_t *)ip));
-				//printf("%d\n", arp_hdr->tpa == *((uint32_t *)ip));
+				uint32_t *ip = malloc(sizeof(u_int32_t));
+				get_parsed_ip_interface(interface, ip);
 
 				uint8_t my_mac[6];
 				get_interface_mac(interface, my_mac);
@@ -153,16 +153,19 @@ int main(int argc, char *argv[])
 					memcpy(eth_hdr->ether_shost, my_mac, 6);
 					memcpy(arp_hdr->sha, my_mac, 6);
 					memcpy(arp_hdr->tha, eth_hdr->ether_dhost, 6);
-					uint32_t aux = ntohl(arp_hdr->tpa);
 					arp_hdr->tpa = arp_hdr->spa;
-					arp_hdr->spa = htonl(aux);
+					arp_hdr->spa = *((uint32_t *) ip);
 					arp_hdr->op = htons(2);
 					send_to_link(interface, buf, len);
 
 					printf("sent response to arp request\n");
+					free(ip);
 					continue;
-				} else
-					continue;
+				} else {
+					free(ip);
+					if (broadcast)
+						continue;
+				}
 			}
 		}
 
@@ -189,16 +192,9 @@ int main(int argc, char *argv[])
 			if (icmp_hdr->type == 8) {				
 				printf("got icmp echo\n");
 
-				char *my_ip = get_interface_ip(interface);
-				printf("my_ip: %s\n", my_ip);
-				uint8_t *ip = malloc(4);
-				char *p = strtok(my_ip, ".");
-				int i = 0;
-				while (p) {
-					ip[i] = atoi(p);
-					i++;
-					p = strtok(NULL, ".");
-				}
+				uint32_t *ip = malloc(sizeof(u_int32_t));
+				get_parsed_ip_interface(interface, ip);
+
 				if (ip_hdr->daddr == *((uint32_t *)ip)) {
 					printf("got icmp echo for us\n");
 					char *icmp_packet = malloc(MAX_PACKET_LEN);
@@ -232,8 +228,11 @@ int main(int argc, char *argv[])
 
 					send_to_link(interface, icmp_packet, len);
 					printf("sent icmp reply\n");
+
+					free(ip);
 					continue;
 				}
+				free(ip);
 			}
 		}
 
@@ -318,7 +317,7 @@ int main(int argc, char *argv[])
 		memcpy(eth_hdr->ether_shost, mac, 6);
 		printf("interface: %d\n", next->interface);
 
-		struct arp_table_entry *next_mac = get_mac_entry(ip_hdr->daddr);
+		struct arp_table_entry *next_mac = get_mac_entry(next->next_hop);
 		if (!next_mac) {
 			printf("sending arp request\n");
 
@@ -343,17 +342,9 @@ int main(int argc, char *argv[])
 			arp_hdr->op = htons(1); // request
 			memcpy(arp_hdr->sha, mac, 6);
 
-			char *my_ip = get_interface_ip(next->interface);
-			printf("my_ip: %s\n", my_ip);
-			uint8_t *ip = malloc(4);
-			char *p = strtok(my_ip, ".");
-			int i = 0;
-			while (p) {
-				ip[i] = atoi(p);
-				i++;
-				p = strtok(NULL, ".");
-			}
-			//arp_hdr->spa = htonl(*((int *) ip));
+			uint32_t *ip = malloc(sizeof(u_int32_t));
+			get_parsed_ip_interface(interface, ip);
+
 			arp_hdr->spa = *((int *) ip);
 			printf("%u\n", htonl(*(int *)ip));
 			arp_hdr->tpa = next->next_hop;
@@ -362,8 +353,7 @@ int main(int argc, char *argv[])
 
 			send_to_link(next->interface, (char *)arp_packet, sizeof(struct ether_header) + sizeof(struct arp_header));
 
-			//free(ip);
-			//free(my_ip);
+			free(ip);
 
 			continue;
 		}
