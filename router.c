@@ -35,8 +35,8 @@ void get_parsed_ip_interface(int interface, uint32_t *ip)
 }
 
 /*
- Returns a pointer (eg. &rtable[i]) to the best matching route, or NULL if there
- is no matching route.
+ 	Returns a pointer (eg. &rtable[i]) to the best matching route, or NULL if 
+	there is no matching route.
 */
 struct route_table_entry *get_best_route(uint32_t ip_dest)
 {
@@ -47,11 +47,11 @@ struct route_table_entry *get_best_route(uint32_t ip_dest)
 	return &rtable[index];
 }
 
+/* 
+	Iterates through the MAC table and searches for an entry that matches given_ip.
+ */
 struct arp_table_entry *get_mac_entry(uint32_t given_ip)
 {
-	/* Iterates through the MAC table and search for an entry
-	 * that matches given_ip. */
-
 	for (int i = 0; i < mac_table_len; i++)
 		if (mac_table[i].ip == given_ip)
 			return &mac_table[i];
@@ -59,12 +59,19 @@ struct arp_table_entry *get_mac_entry(uint32_t given_ip)
 	return NULL;
 }
 
+/*
+	Iterates through addresses and calls insert function for each of them.
+*/
 void insert_addresses(void)
 {
 	for (int i = 0; i < rtable_len; i++)
 		insert_address(root, rtable[i], i);
 }
 
+/*
+	Updates arp table after arp reply received. Takes information from 
+	arp header.
+*/
 void update_arp_table(struct arp_header* arp_hdr)
 {
 	mac_table_len++;
@@ -75,6 +82,9 @@ void update_arp_table(struct arp_header* arp_hdr)
 	mac_table[mac_table_len - 1].ip = arp_hdr->spa;
 }
 
+/*
+	Checks if given mac is broadcast address.
+*/
 int check_broadcast(uint8_t mac[6])
 {
 	int i;
@@ -93,14 +103,16 @@ int main(int argc, char *argv[])
 	init(argc - 2, argv + 2);
 
 	rtable = malloc(sizeof(struct route_table_entry) * 100000);
-	DIE(rtable == NULL, "memory");
+	DIE(rtable == NULL, "memory rtable");
 	
+	// statically parsed rtable and dinamically constructed arp table
 	rtable_len = read_rtable(argv[1], rtable);
 	mac_table_len = 0;
 	mac_table = NULL;
 
 	q = queue_create();
 
+	// creating trie
 	root = create_node();	
 	insert_addresses();
 
@@ -159,6 +171,7 @@ int main(int argc, char *argv[])
 				int broadcast = check_broadcast(eth_hdr->ether_dhost);
 
 				uint32_t *ip = malloc(sizeof(u_int32_t));
+				DIE(!ip, "malloc");
 				get_parsed_ip_interface(interface, ip);
 
 				uint8_t my_mac[6];
@@ -186,7 +199,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		/* Check if we got an IPv4 packet */
+		// checks if we got an IPv4 packet
 		if (eth_hdr->ether_type != ntohs(0x0800)) {
 			printf("Ignored non-IPv4 packet\n");
 			continue;
@@ -194,6 +207,7 @@ int main(int argc, char *argv[])
 
 		struct iphdr *ip_hdr = (struct iphdr *)(buf + sizeof(struct ether_header));
 
+		// checks checksum
 		uint16_t recv_sum = ntohs(ip_hdr->check);
 		ip_hdr->check = 0;
 		int sum_ok = (checksum((uint16_t *) ip_hdr, sizeof(struct iphdr)) == recv_sum);
@@ -202,6 +216,7 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
+		// check icmp
 		if (ip_hdr->protocol == 1) {
 			printf("got icmp packet\n");
 
@@ -210,12 +225,14 @@ int main(int argc, char *argv[])
 				printf("got icmp echo\n");
 
 				uint32_t *ip = malloc(sizeof(u_int32_t));
+				DIE(!ip, "malloc");
 				get_parsed_ip_interface(interface, ip);
 
 				if (ip_hdr->daddr == *((uint32_t *)ip)) {
 					printf("got icmp echo for us\n");
 
 					char *icmp_packet = malloc(MAX_PACKET_LEN);
+					DIE(!icmp_packet, "malloc");
 					memset(icmp_packet, 0, MAX_PACKET_LEN);
 
 					struct ether_header *eth_icmp = (struct ether_header*)icmp_packet;
@@ -252,10 +269,12 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		/* Calling get_best_route to find the most specific route, continue; sending host unreachable if null */
+		// calls get_best_route to find the most specific route;
+		// sending host unreachable if null 
 		struct route_table_entry *next = get_best_route(ip_hdr->daddr);
 		if (!next) {
 			char *icmp_packet = malloc(MAX_PACKET_LEN);
+			DIE(!icmp_packet, "malloc");
 			memset(icmp_packet, 0, MAX_PACKET_LEN);
 
 			struct ether_header *eth_icmp = (struct ether_header*)icmp_packet;
@@ -272,6 +291,7 @@ int main(int argc, char *argv[])
 			ip_hdr_icmp->daddr = ip_hdr->saddr;
 
 			uint32_t *ip = malloc(sizeof(uint32_t));
+			DIE(!ip, "malloc");
 			get_parsed_ip_interface(interface, ip);
 			ip_hdr_icmp->saddr = *ip;
 			free(ip);
@@ -279,6 +299,7 @@ int main(int argc, char *argv[])
 			ip_hdr_icmp->check = htons(checksum((uint16_t *) ip_hdr_icmp, sizeof(struct iphdr)));
 
 			char *first_64 = malloc(8); // 8 bytes is 64 bits
+			DIE(!first_64, "malloc");
 			memcpy(first_64, buf + sizeof(struct ether_header) + sizeof(struct iphdr), 8);
 
 			struct icmphdr *icmp_hdr = (struct icmphdr *)(icmp_packet + sizeof(struct ether_header) + sizeof(struct iphdr));
@@ -297,13 +318,14 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		/* TODO 2.3: Check TTL >= 1. Update TLL. Update checksum  */
+		// checks TTL > 1; updates TLL; updates checksum
 		if (ip_hdr->ttl > 1) {
 			ip_hdr->ttl--;
 			ip_hdr->check = 0;
 			ip_hdr->check = htons(checksum((uint16_t *)ip_hdr, sizeof(struct iphdr)));
 		} else {
 			char *icmp_packet = malloc(MAX_PACKET_LEN);
+			DIE(!icmp_packet, "malloc");
 			memset(icmp_packet, 0, MAX_PACKET_LEN);
 
 			struct ether_header *eth_icmp = (struct ether_header*)icmp_packet;
@@ -319,6 +341,7 @@ int main(int argc, char *argv[])
 			ip_hdr_icmp->tot_len = 16 + 2 * sizeof(struct iphdr);
 			ip_hdr_icmp->daddr = ip_hdr->saddr;
 			uint32_t *ip = malloc(sizeof(uint32_t));
+			DIE(!ip, "malloc");
 			get_parsed_ip_interface(interface, ip);
 			ip_hdr_icmp->saddr = *ip;
 			free(ip);
@@ -327,6 +350,7 @@ int main(int argc, char *argv[])
 
 
 			char *first_64 = malloc(8); // 8 bytes is 64 bits
+			DIE(!first_64, "malloc");
 			memcpy(first_64, buf + sizeof(struct ether_header) + sizeof(struct iphdr), 8);
 
 			struct icmphdr *icmp_hdr = (struct icmphdr *)(icmp_packet + sizeof(struct ether_header) + sizeof(struct iphdr));
@@ -345,9 +369,8 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		/* TODO 2.4: Update the ethernet addresses. Use get_mac_entry to find the destination MAC
-		 * address. Use get_interface_mac(m.interface, uint8_t *mac) to
-		 * find the mac address of our interface. */
+		// updates the ethernet addresses; sending arp request if we have no
+		// value for dhost
 		
 		uint8_t mac[6];
 		get_interface_mac(next->interface, mac);
@@ -359,13 +382,16 @@ int main(int argc, char *argv[])
 			printf("sending arp request\n");
 
 			void *packet = malloc(MAX_PACKET_LEN * sizeof(char));
+			DIE(!packet, "malloc");
 			memcpy(packet, buf, len);
 			queue_enq(q, packet);
 			int *packet_len = malloc(sizeof(int));
+			DIE(!packet_len, "malloc");
 			*packet_len = len;
 			queue_enq(q, packet_len);
 
 			void *arp_packet = malloc(MAX_PACKET_LEN * sizeof(char));
+			DIE(!arp_packet, "malloc");
 			struct ether_header *eth_arp_hdr = (struct ether_header *)arp_packet;
 			memset(eth_arp_hdr->ether_dhost, 0xff, 6);
 			memcpy(eth_arp_hdr->ether_shost, mac, 6);
@@ -380,6 +406,7 @@ int main(int argc, char *argv[])
 			memcpy(arp_hdr->sha, mac, 6);
 
 			uint32_t *ip = malloc(sizeof(u_int32_t));
+			DIE(!ip, "malloc");
 			get_parsed_ip_interface(interface, ip);
 
 			arp_hdr->spa = *((int *) ip);
